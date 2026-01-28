@@ -104,26 +104,30 @@ plt.show()
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.conv1 = nn.Conv2d(3, 6, 5) # Input channels = 3 (RGB), Output channels = 6 (filters / feature maps), Kernel size = 5
+        self.conv2 = nn.Conv2d(6, 16, 5) # Input channels = 6 (filters / feature maps), Output channels = 16 (filters / feature maps), Kernel size = 5
 
-        self.pool = nn.MaxPool2d(2, 2)
+        self.pool = nn.MaxPool2d(2, 2) # Pooling layer to reduce spatial dimensions by halving height and width, kernel size = 2, stride = 2
 
-        self.fc1 = nn.Linear(1344, 256)
-        self.fc2 = nn.Linear(256, 5)
+        self.fc1 = nn.Linear(1344, 256) # Fully-Connected layer: takes a flattened feature vector of length 1344 and maps to 256 hidden units.
+        self.fc2 = nn.Linear(256, 5) # Output 5 logits for each class, later used with nn.CrossEntropyLoss()
 
         self.relu = nn.ReLU()
+
+        #TODO: Experiment with different dropout rates. However, it's a small model with small dataset, the regularization (dropout and weight_decay) may overkill.
+        # self.dropout = nn.Dropout(0.2) # Dropout layer to prevent overfitting.
 
 
     def forward(self, x):
         #extract features with convolutional layers
         x = self.pool(self.relu(self.conv1(x)))
         x = self.pool(self.relu(self.conv2(x)))
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
+        x = torch.flatten(x, 1) # feature aggregation: flatten all dimensions except batch
         
         #linear layer for classification
         x = self.fc1(x)
         x = self.relu(x)
+        # x = self.dropout(x)
         x = self.fc2(x)
        
         return x
@@ -138,25 +142,25 @@ net = Net()
 #for classification tasks
 criterion = nn.CrossEntropyLoss()
 #You could use also ADAM
-optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9) #QUESTION: ADAM or SGD? Also, Experiment with different weight decay values (L2 regularization).
 
 
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
-losses = {'train': [], 'val': []}
-accs = {'train': [], 'val': []}
-best_acc = 0
+losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
+accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
+best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
 for epoch in range(10):  # loop over the dataset multiple times
 
     epoch_loss = 0.0
     correct = 0
     total = 0
-    for i, data in enumerate(trainloader, 0):
+    for i, data in enumerate(trainloader, 0): # yields mini-batches
         # get the inputs; data is a list of [inputs, labels]
         inputs, labels = data
 
-        # zero the parameter gradients
+        # reset the parameter gradients
         optimizer.zero_grad()
 
         # forward + backward + optimize
@@ -166,27 +170,28 @@ for epoch in range(10):  # loop over the dataset multiple times
         optimizer.step()
 
         # print statistics
-        epoch_loss += loss.item()
+        epoch_loss += loss.item() # Adds the scalar loss for this batch to the epoch total.
 
-        _, predicted = torch.max(outputs, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        _, predicted = torch.max(outputs, 1) # Finds the class with the highest logit for each sample in the batch.
+        total += labels.size(0) # Adds number of samples in this batch.
+        correct += (predicted == labels).sum().item() # Counts number of correct predictions in this batch.
 
     print(f'Epoch {epoch + 1} loss: {epoch_loss / len(trainloader)}')
-    losses['train'] += [epoch_loss / len(trainloader)]
-    accs['train'] += [100.*correct/total]
+    losses['train'] += [epoch_loss / len(trainloader)] # mean loss over all batchesper epoch.
+    accs['train'] += [100.*correct/total]  # accuracy per epoch.
  
-    # prepare to count predictions for each class
-    correct_pred = {classname: 0 for classname in val_ds.class_labels}
-    total_pred = {classname: 0 for classname in val_ds.class_labels}
+    # Validation Setup:
+    correct_pred = {classname: 0 for classname in val_ds.class_labels} # e.g. correct_pred['left'] = how many of those were predicted correctly
+    total_pred = {classname: 0 for classname in val_ds.class_labels} # e.g. total_pred['left'] = how many “left” examples exist in validation
 
-    # again no gradients needed
+    # Validation Loop:
+    # Question: how does validation data ensure random sampling of the dataset? where in the code is this ensured? Or the training data is located in a different order to the validation data?
     val_loss = 0
-    with torch.no_grad():
+    with torch.no_grad(): # disable gradient computation to save memory and speed up inference.
         for data in valloader:
             images, labels = data
             outputs = net(images)
-            _, predictions = torch.max(outputs, 1)
+            _, predictions = torch.max(outputs, 1) # Finds the class with the highest logit for each sample in the batch, and returns the index of the class.
             loss = criterion(outputs, labels)
 
             val_loss += loss.item()
@@ -199,14 +204,14 @@ for epoch in range(10):  # loop over the dataset multiple times
     # print accuracy for each class
     class_accs = []
     for classname, correct_count in correct_pred.items():
-        accuracy = 100 * float(correct_count) / total_pred[classname]
+        accuracy = 100 * float(correct_count) / total_pred[classname] # per-class accuracy.
         class_accs += [accuracy]
 
-    accs['val'] += [np.mean(class_accs)]
-    losses['val'] += [val_loss/len(valloader)]
+    accs['val'] += [np.mean(class_accs)] # mean accuracy over all classes.
+    losses['val'] += [val_loss/len(valloader)] # mean loss over all batches.
 
-    if np.mean(class_accs) > best_acc:
-        torch.save(net.state_dict(), 'steer_net.pth')
+    if np.mean(class_accs) > best_acc: # save the model if the current validation accuracy is better than the best seen so far.
+        torch.save(net.state_dict(), 'steer_net.pth') # So at the end, steer_net.pth is the best-performing model during training (according to validation accuracy).
         best_acc = np.mean(class_accs)
 
 print('Finished Training')
@@ -238,7 +243,7 @@ with torch.no_grad():
         # calculate outputs by running images through the network
         outputs = net(images)
         
-        # the class with the highest energy is what we choose as prediction
+        # the class with the highest energy (logit) is what we choose as prediction
         _, predicted = torch.max(outputs, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()

@@ -5,6 +5,16 @@ from torch.utils.data import Dataset
 import cv2
 from glob import glob
 from os import path
+"""
+Summary
+1. Finds all images in a folder
+2. Loads each image and crops the top 120 pixels
+3. Applies transforms (resize, normalize, etc.)
+4. Extracts the steering angle from the filename
+5. Converts the continuous angle to a discrete class (0-4)
+6. Returns (image_tensor, class_label) for training
+7. This enables using PyTorch's DataLoader for batching, shuffling, and parallel loading during training.
+"""
 
 class SteerDataSet(Dataset):
     
@@ -25,10 +35,10 @@ class SteerDataSet(Dataset):
     
     def __getitem__(self,idx):
         f = self.filenames[idx]        
-        img = cv2.imread(f)[120:, :, :]
+        img = cv2.imread(f)[120:, :, :] # crop the image to the bottom half to remove the sky, focus on the track
         
         if self.transform == None:
-            img = self.totensor(img)
+            img = self.totensor(img) # convert the image to a tensor, vector of pixels
         else:
             img = self.transform(img)   
         
