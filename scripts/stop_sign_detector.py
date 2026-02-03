@@ -48,11 +48,11 @@ class StopSignDetector:
         self,
         min_area: int = 500,
         # Red in HSV wraps around 0/180. We need two ranges:
-        # Range 1: Hue 0-10 (red-orange side)
-        lower_red1: tuple = (0, 100, 100),
-        upper_red1: tuple = (10, 255, 255),
-        # Range 2: Hue 160-180 (red-magenta side)
-        lower_red2: tuple = (160, 100, 100),
+        # Range 1: Hue 0-5 (strict red, avoiding orange at ~10-20)
+        lower_red1: tuple = (0, 130, 100),
+        upper_red1: tuple = (5, 255, 255),
+        # Range 2: Hue 175-180 (deep red)
+        lower_red2: tuple = (175, 130, 100),
         upper_red2: tuple = (180, 255, 255),
     ):
         """
