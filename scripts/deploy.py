@@ -22,6 +22,17 @@ from stop_sign_detector import StopSignDetector
 
 parser = argparse.ArgumentParser(description='PiBot client')
 parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
+parser.add_argument(
+    '--debug_stop',
+    action='store_true',
+    help='Save frames + red mask + stats when stop sign triggers; log area during inference for tuning min_area',
+)
+parser.add_argument(
+    '--debug_stop_dir',
+    type=str,
+    default=None,
+    help='Directory for debug images (default: deploy_debug/ in project root)',
+)
 args = parser.parse_args()
 
 bot = PiBot(ip=args.ip)
@@ -89,7 +100,7 @@ transform = transforms.Compose([
 # You can tune thresholds by running:
 #   python scripts/stop_sign_detector.py --image <image_path> --tune
 stop_detector = StopSignDetector(
-    min_area=500,  # Tune this based on testing
+    min_area=200,  # Tune this based on testing
     # HSV thresholds for red (defaults usually work, but tune if needed):
     # lower_red1=(0, 100, 100),
     # upper_red1=(10, 255, 255),
@@ -102,6 +113,21 @@ stop_sign_handled = False  # True if we've already stopped for the current sign
 STOP_DURATION = 2.0        # How long to stop (seconds)
 RESUME_COOLDOWN = 3.0      # Cooldown after stopping before detecting again
 last_stop_time = 0         # Timestamp of last stop (for cooldown)
+
+########################################
+# Debug output for stop sign tuning
+########################################
+debug_stop_enabled = args.debug_stop
+debug_stop_dir = args.debug_stop_dir
+if debug_stop_enabled:
+    if debug_stop_dir is None:
+        debug_stop_dir = os.path.abspath(os.path.join(script_path, "..", "deploy_debug"))
+    os.makedirs(debug_stop_dir, exist_ok=True)
+    debug_stop_frame_count = 0  # Number of "stop triggered" frames saved
+    last_debug_log_time = 0     # Throttle inference-time area logging
+    DEBUG_LOG_INTERVAL = 0.5     # Log area at most every 0.5 s when area > 0
+    if debug_stop_dir:
+        print(f"[debug_stop] Saving stop-sign frames and stats to: {debug_stop_dir}")
 
 #countdown before beginning
 print("Get ready...")
@@ -154,19 +180,57 @@ try:
         # Check for stop signs using the full image (not cropped).
         # The stop sign could be anywhere in the frame, not just the bottom.
         
+        current_time = time.time()
+        
+        ##################################################
         # Use the full image for stop sign detection
-        stop_detected, stop_area = stop_detector.detect(im)
+        ##################################################
+        if debug_stop_enabled:
+            stop_details = stop_detector.detect_with_details(im)
+            stop_detected = stop_details['detected']
+            stop_area = stop_details['largest_area']
+        else:
+            stop_detected, stop_area = stop_detector.detect(im)
+            stop_details = None
+        
+        # During inference: log red blob area periodically for tuning min_area
+        if debug_stop_enabled and stop_area > 0:
+            if current_time - last_debug_log_time >= DEBUG_LOG_INTERVAL:
+                last_debug_log_time = current_time
+                triggered = "TRIGGER" if stop_detected else "below threshold"
+                print(f"[stop_sign] area={stop_area} (min_area={stop_detector.min_area}) -> {triggered}")
         
         # Only handle stop sign if:
         # 1. A stop sign is detected AND close enough (area >= min_area)
         # 2. We haven't just handled a stop sign (cooldown period)
         # 3. We're not currently in the middle of handling one
-        current_time = time.time()
-        
         if stop_detected and not stop_sign_handled:
             # Check cooldown (don't stop again immediately after resuming)
             if current_time - last_stop_time > RESUME_COOLDOWN:
                 print(f"STOP SIGN DETECTED! Area: {stop_area}. Stopping...")
+                
+                ################################################################################
+                # Save frame, mask, and overlay when --debug_stop is on (for tuning min_area)
+                ##########################################################################################
+                if debug_stop_enabled and stop_details is not None:
+                    debug_stop_frame_count += 1
+                    prefix = os.path.join(debug_stop_dir, f"stop_{debug_stop_frame_count:04d}")
+                    cv2.imwrite(f"{prefix}_frame.jpg", im)
+                    if stop_details.get('mask') is not None:
+                        cv2.imwrite(f"{prefix}_mask.jpg", stop_details['mask'])
+                    vis = im.copy()
+                    if stop_details.get('bounding_box'):
+                        x, y, w, h = stop_details['bounding_box']
+                        cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    if stop_details.get('centroid'):
+                        cv2.circle(vis, stop_details['centroid'], 5, (0, 0, 255), -1)
+                    cv2.putText(
+                        vis, f"area={stop_area} min_area={stop_detector.min_area}",
+                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
+                    )
+                    cv2.imwrite(f"{prefix}_overlay.jpg", vis)
+                    print(f"[debug_stop] Saved {prefix}_frame.jpg, _mask.jpg, _overlay.jpg")
+                    print(f"  largest_area={stop_area}, min_area={stop_detector.min_area}, centroid={stop_details.get('centroid')}, bbox={stop_details.get('bounding_box')}, all_areas={stop_details.get('all_areas', [])}")
                 
                 # STOP THE ROBOT COMPLETELY
                 bot.setVelocity(0, 0)
