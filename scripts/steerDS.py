@@ -1,38 +1,49 @@
-import numpy as np
-from glob import glob
-from torchvision import transforms
-from torch.utils.data import Dataset
+import re
 import cv2
-from glob import glob
+import numpy as np
+from pathlib import Path
+from torch.utils.data import Dataset
+from torchvision import transforms
 from os import path
-"""
-Summary
-1. Finds all images in a folder
-2. Loads each image and crops the top 120 pixels
-3. Applies transforms (resize, normalize, etc.)
-4. Extracts the steering angle from the filename
-5. Converts the continuous angle to a discrete class (0-4)
-6. Returns (image_tensor, class_label) for training
-7. This enables using PyTorch's DataLoader for batching, shuffling, and parallel loading during training.
-"""
 
 class SteerDataSet(Dataset):
-    
-    def __init__(self,root_folder,img_ext = ".jpg" , transform=None):
-        self.root_folder = root_folder
-        self.transform = transform        
-        self.img_ext = img_ext        
-        self.filenames = glob(path.join(self.root_folder,"*" + self.img_ext))            
+    """
+    Dataset that can be constructed from:
+      - root_folder (recursively gathers images), OR
+      - an explicit list of filenames (recommended for train/val split)
+    It crops the top 120 px, applies transform, and returns (image_tensor, class_id).
+    """
+
+    def __init__(self, root_folder=None, img_ext=".jpg", transform=None, filenames=None, recursive=True):
+        self.transform = transform
+        self.img_ext = img_ext
+        self.recursive = recursive
         self.totensor = transforms.ToTensor()
-        self.class_labels = ['sharp left',
-                            'left',
-                            'straight',
-                            'right',
-                            'sharp right']
-        
-    def __len__(self):        
+
+        self.class_labels = [
+            "sharp left",
+            "left",
+            "straight",
+            "right",
+            "sharp right",
+        ]
+
+        if filenames is not None:
+            self.filenames = list(filenames)
+        else:
+            if root_folder is None:
+                raise ValueError("Provide either root_folder or filenames.")
+            root = Path(root_folder)
+            if recursive:
+                self.filenames = [str(p) for p in root.rglob(f"*{img_ext}")]
+            else:
+                self.filenames = [str(p) for p in root.glob(f"*{img_ext}")]
+
+        self.filenames = sorted(self.filenames)
+
+    def __len__(self):
         return len(self.filenames)
-    
+
     def __getitem__(self,idx):
         f = self.filenames[idx]        
         img = cv2.imread(f)[120:, :, :] # crop the image to the bottom half to remove the sky, focus on the track
