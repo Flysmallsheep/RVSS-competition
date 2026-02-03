@@ -16,6 +16,9 @@ script_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.abspath(os.path.join(script_path, "../PenguinPi-robot/software/python/client/")))
 from pibot_client import PiBot
 
+# Import stop sign detector
+from stop_sign_detector import StopSignDetector
+
 
 parser = argparse.ArgumentParser(description='PiBot client')
 parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
@@ -74,6 +77,32 @@ transform = transforms.Compose([
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
+# ============================================================================
+# STOP SIGN DETECTOR SETUP
+# ============================================================================
+# Initialize the stop sign detector with tunable parameters.
+# min_area: Minimum red blob area (pixels) to trigger a stop.
+#   - Smaller = detect from farther away (may cause early stops)
+#   - Larger = must be very close (may miss the sign)
+#   - Default 500 is a starting point; tune based on your camera and lighting.
+#
+# You can tune thresholds by running:
+#   python scripts/stop_sign_detector.py --image <image_path> --tune
+stop_detector = StopSignDetector(
+    min_area=500,  # Tune this based on testing
+    # HSV thresholds for red (defaults usually work, but tune if needed):
+    # lower_red1=(0, 100, 100),
+    # upper_red1=(10, 255, 255),
+    # lower_red2=(160, 100, 100),
+    # upper_red2=(180, 255, 255),
+)
+
+# Stop sign handling state
+stop_sign_handled = False  # True if we've already stopped for the current sign
+STOP_DURATION = 2.0        # How long to stop (seconds)
+RESUME_COOLDOWN = 3.0      # Cooldown after stopping before detecting again
+last_stop_time = 0         # Timestamp of last stop (for cooldown)
+
 #countdown before beginning
 print("Get ready...")
 time.sleep(1)
@@ -119,12 +148,51 @@ try:
         # Safety clamp to the expected range.
         angle = float(np.clip(angle, -0.5, 0.5))
 
-        #TO DO: check for stop signs?
+        # ====================================================================
+        # STOP SIGN DETECTION
+        # ====================================================================
+        # Check for stop signs using the full image (not cropped).
+        # The stop sign could be anywhere in the frame, not just the bottom.
         
-        # angle is already computed above; keep as-is for control below.
-
-        Kd = 20 #base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 20 #how fast to turn when given an angle
+        # Use the full image for stop sign detection
+        stop_detected, stop_area = stop_detector.detect(im)
+        
+        # Only handle stop sign if:
+        # 1. A stop sign is detected AND close enough (area >= min_area)
+        # 2. We haven't just handled a stop sign (cooldown period)
+        # 3. We're not currently in the middle of handling one
+        current_time = time.time()
+        
+        if stop_detected and not stop_sign_handled:
+            # Check cooldown (don't stop again immediately after resuming)
+            if current_time - last_stop_time > RESUME_COOLDOWN:
+                print(f"STOP SIGN DETECTED! Area: {stop_area}. Stopping...")
+                
+                # STOP THE ROBOT COMPLETELY
+                bot.setVelocity(0, 0)
+                
+                # Wait for the required duration (rules say must come to complete stop)
+                time.sleep(STOP_DURATION)
+                
+                # Mark that we've handled this stop sign
+                stop_sign_handled = True
+                last_stop_time = time.time()
+                
+                print("Resuming...")
+                continue  # Skip this iteration, resume driving on next loop
+        
+        # Reset the handled flag once we no longer see the stop sign
+        # This allows us to detect and stop at the NEXT stop sign
+        if not stop_detected and stop_sign_handled:
+            # Add a small delay before resetting to avoid flickering
+            if current_time - last_stop_time > RESUME_COOLDOWN:
+                stop_sign_handled = False
+        
+        # ====================================================================
+        # MOTOR CONTROL
+        # ====================================================================
+        Kd = 20  # Base wheel speeds, increase to go faster, decrease to go slower
+        Ka = 20  # How fast to turn when given an angle
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
             
