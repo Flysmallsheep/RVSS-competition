@@ -5,7 +5,7 @@ import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-
+from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
 import os
 import numpy as np
 import sklearn.metrics as metrics
@@ -19,6 +19,10 @@ from steerDS import SteerDataSet
 ####     Please review here if you get stuck: https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html                   ####
 #######################################################################################################################################
 torch.manual_seed(0)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+BATCH_SIZE = 2048
+
 
 #Helper function for visualising images in our dataset
 def imshow(img):
@@ -39,101 +43,186 @@ transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                 ])
 
-script_path = os.path.dirname(os.path.realpath(__file__))
-
 ###################
 ## Train dataset ##
 ###################
 
-train_ds = SteerDataSet(os.path.join(script_path, '..', 'data', 'train_starter'), '.jpg', transform)
-print("The train dataset contains %d images " % len(train_ds))
+from pathlib import Path
 
-#data loader nicely batches images for the training process and shuffles (if desired)
-trainloader = DataLoader(train_ds,batch_size=8,shuffle=True)
-all_y = []
-for S in trainloader:
-    im, y = S    
-    all_y += y.tolist()
+from torch.utils.data import WeightedRandomSampler
+import numpy as np
 
-print(f'Input to network shape: {im.shape}')
+def make_weighted_sampler(dataset, num_classes=5):
+    # Get label for every sample in the dataset
+    labels = []
+    for i in range(len(dataset)):
+        _, y = dataset[i]
+        labels.append(int(y))
+    labels = np.array(labels)
 
-#visualise the distribution of GT labels
-all_lbls, all_counts = np.unique(all_y, return_counts = True)
-plt.bar(all_lbls, all_counts, width = (all_lbls[1]-all_lbls[0])/2)
-plt.xlabel('Labels')
-plt.ylabel('Counts')
-plt.xticks(all_lbls)
-plt.title('Training Dataset')
-plt.show()
+    # Count class frequency
+    class_counts = np.bincount(labels, minlength=num_classes)
+    print("Train class counts:", class_counts.tolist())
 
-# visualise some images and print labels -- check these seem reasonable
-example_ims, example_lbls = next(iter(trainloader))
-print(' '.join(f'{example_lbls[j]}' for j in range(len(example_lbls))))
-imshow(torchvision.utils.make_grid(example_ims))
+    # Inverse frequency weights (avoid div-by-zero)
+    class_weights = 1.0 / np.maximum(class_counts, 1)
+    sample_weights = class_weights[labels]
+
+    # Sample class 'straight' (class 2) 1.1x more than the others
+    sample_weights[labels == 2] *= 1.1
+
+    sampler = WeightedRandomSampler(
+        weights=torch.as_tensor(sample_weights, dtype=torch.double),
+        num_samples=len(sample_weights),   # samples per epoch
+        replacement=True                  # oversampling works via replacement
+    )
+    return sampler
 
 
-########################
-## Validation dataset ##
-########################
+def gather_all_images(root_dir: str, img_ext: str = ".jpg"):
+    root = Path(root_dir)
+    files = [str(p) for p in root.rglob(f"*{img_ext}")]
+    return sorted(files)
 
-val_ds = SteerDataSet(os.path.join(script_path, '..', 'data', 'val_starter'), '.jpg', transform)
-print("The train dataset contains %d images " % len(val_ds))
+def split_train_val_by_folder(files, train_ratio=0.9, seed=0):
+    """
+    Prevent leakage: all images from the same folder go to the same split.
+    """
+    rng = np.random.default_rng(seed)
 
-#data loader nicely batches images for the training process and shuffles (if desired)
-valloader = DataLoader(val_ds,batch_size=1)
-all_y = []
-for S in valloader:
-    im, y = S    
-    all_y += y.tolist()
+    # group by parent folder
+    parents = sorted(set(Path(f).parent for f in files))
+    rng.shuffle(parents)
 
-print(f'Input to network shape: {im.shape}')
+    n_train_folders = max(1, int(len(parents) * train_ratio))
+    train_parents = set(parents[:n_train_folders])
 
-#visualise the distribution of GT labels
-all_lbls, all_counts = np.unique(all_y, return_counts = True)
-plt.bar(all_lbls, all_counts, width = (all_lbls[1]-all_lbls[0])/2)
-plt.xlabel('Labels')
-plt.ylabel('Counts')
-plt.xticks(all_lbls)
-plt.title('Validation Dataset')
-plt.show()
+    train_files = [f for f in files if Path(f).parent in train_parents]
+    val_files   = [f for f in files if Path(f).parent not in train_parents]
+    return train_files, val_files
+
+script_path = os.path.dirname(os.path.realpath(__file__))
+
+# CHANGE THIS: point to the folder that contains ALL subfolders of images
+data_root = os.path.join(script_path, '..', 'data')  # <-- adjust if needed
+
+all_files = gather_all_images(data_root, img_ext=".jpg")
+print("Total images found:", len(all_files))
+
+train_files, val_files = split_train_val_by_folder(all_files, train_ratio=0.9, seed=0)
+print("Train images:", len(train_files))
+print("Val images:", len(val_files))
+
+train_ds = SteerDataSet(filenames=train_files, img_ext=".jpg", transform=transform)
+val_ds   = SteerDataSet(filenames=val_files,   img_ext=".jpg", transform=transform)
+
+train_sampler = make_weighted_sampler(train_ds, num_classes=5)
+
+trainloader = DataLoader(
+    train_ds,
+    batch_size= BATCH_SIZE,
+    sampler=train_sampler,  # <-- oversampling
+    shuffle=False,          # <-- must be False when using sampler
+)
+valloader   = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+
+
+num_classes = 5
+counts = torch.zeros(num_classes, dtype=torch.long)
+
+with torch.no_grad():
+    for _, y in valloader:
+        y = y.view(-1).long().cpu()  # (B,) on CPU
+        counts += torch.bincount(y, minlength=num_classes)
+
+print("Val counts per class:", counts.tolist())
+print("Class names:", val_ds.class_labels)
+
 
 #######################################################################################################################################
 ####     INITIALISE OUR NETWORK                                                                                                    ####
 #######################################################################################################################################
 
-class Net(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5) # Input channels = 3 (RGB), Output channels = 6 (filters / feature maps), Kernel size = 5
-        self.conv2 = nn.Conv2d(6, 16, 5) # Input channels = 6 (filters / feature maps), Output channels = 16 (filters / feature maps), Kernel size = 5
+# class Net(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.conv1 = nn.Conv2d(3, 6, 5)
+#         self.conv2 = nn.Conv2d(6, 16, 5)
 
-        self.pool = nn.MaxPool2d(2, 2) # Pooling layer to reduce spatial dimensions by halving height and width, kernel size = 2, stride = 2
+#         self.pool = nn.MaxPool2d(2, 2)
 
-        self.fc1 = nn.Linear(1344, 256) # Fully-Connected layer: takes a flattened feature vector of length 1344 and maps to 256 hidden units.
-        self.fc2 = nn.Linear(256, 5) # Output 5 logits for each class, later used with nn.CrossEntropyLoss()
+#         self.fc1 = nn.Linear(1344, 256)
+#         self.fc2 = nn.Linear(256, 5)
 
-        self.relu = nn.ReLU()
-
-        #TODO: Experiment with different dropout rates. However, it's a small model with small dataset, the regularization (dropout and weight_decay) may overkill.
-        # self.dropout = nn.Dropout(0.2) # Dropout layer to prevent overfitting.
+#         self.relu = nn.ReLU()
 
 
-    def forward(self, x):
-        #extract features with convolutional layers
-        x = self.pool(self.relu(self.conv1(x)))
-        x = self.pool(self.relu(self.conv2(x)))
-        x = torch.flatten(x, 1) # feature aggregation: flatten all dimensions except batch
+#     def forward(self, x):
+#         #extract features with convolutional layers
+#         x = self.pool(self.relu(self.conv1(x)))
+#         x = self.pool(self.relu(self.conv2(x)))
+#         x = torch.flatten(x, 1) # flatten all dimensions except batch
         
-        #linear layer for classification
-        x = self.fc1(x)
-        x = self.relu(x)
-        # x = self.dropout(x)
-        x = self.fc2(x)
+#         #linear layer for classification
+#         x = self.fc1(x)
+#         x = self.relu(x)
+#         x = self.fc2(x)
        
-        return x
+#         return x
+
+
+# class Net(nn.Module):
+#     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+#         super().__init__()
+#         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+#         self.model = mobilenet_v3_small(weights=weights)
+
+#         in_features = self.model.classifier[-1].in_features
+#         self.model.classifier[-1] = nn.Sequential(
+#             nn.Dropout(dropout),
+#             nn.Linear(in_features, num_classes),
+#         )
+
+#         if freeze_backbone:
+#             for p in self.model.features.parameters():
+#                 p.requires_grad = False
+
+#     def forward(self, x):
+#         return self.model(x)
+    
+# class Net(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.conv1 = nn.Conv2d(3, 6, 5)
+#         self.conv2 = nn.Conv2d(6, 16, 5)
+#         self.conv3 = nn.Conv2d(16, 16, 1)
+
+#         self.pool = nn.MaxPool2d(2, 2)
+
+#         self.fc1 = nn.Linear(1344, 256)
+#         self.fc2 = nn.Linear(256, 5)
+
+#         self.relu = nn.ReLU()
+
+
+#     def forward(self, x):
+#         #extract features with convolutional layers
+#         x = self.pool(self.relu(self.conv1(x)))
+#         x = self.pool(self.relu(self.conv2(x)))
+#         x = self.relu(self.conv3(x))
+#         x = torch.flatten(x, 1) # flatten all dimensions except batch
+        
+#         #linear layer for classification
+#         x = self.fc1(x)
+#         x = self.relu(x)
+#         x = self.fc2(x)
+       
+#         return x
+
+
     
 
-net = Net()
+net = Net().to(device)
 
 #######################################################################################################################################
 ####     INITIALISE OUR LOSS FUNCTION AND OPTIMISER                                                                                ####
@@ -142,16 +231,24 @@ net = Net()
 #for classification tasks
 criterion = nn.CrossEntropyLoss()
 #You could use also ADAM
-optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9) #QUESTION: ADAM or SGD? Also, Experiment with different weight decay values (L2 regularization).
+# optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.Adam(net.parameters(), lr=0.01)
+
+scheduler = optim.lr_scheduler.StepLR(
+    optimizer,
+    step_size=5,  # every 5 epochs
+    gamma=0.5     # halve the LR
+)
 
 
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
+num_epochs = 15
 losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
 accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
 best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
-for epoch in range(10):  # loop over the dataset multiple times
+for epoch in range(num_epochs):  # loop over the dataset multiple times
 
     epoch_loss = 0.0
     correct = 0
@@ -159,6 +256,8 @@ for epoch in range(10):  # loop over the dataset multiple times
     for i, data in enumerate(trainloader, 0): # yields mini-batches
         # get the inputs; data is a list of [inputs, labels]
         inputs, labels = data
+        inputs = inputs.to(device)
+        labels = labels.to(device)
 
         # reset the parameter gradients
         optimizer.zero_grad()
@@ -190,6 +289,8 @@ for epoch in range(10):  # loop over the dataset multiple times
     with torch.no_grad(): # disable gradient computation to save memory and speed up inference.
         for data in valloader:
             images, labels = data
+            images = images.to(device)
+            labels = labels.to(device)
             outputs = net(images)
             _, predictions = torch.max(outputs, 1) # Finds the class with the highest logit for each sample in the batch, and returns the index of the class.
             loss = criterion(outputs, labels)
@@ -209,6 +310,9 @@ for epoch in range(10):  # loop over the dataset multiple times
 
     accs['val'] += [np.mean(class_accs)] # mean accuracy over all classes.
     losses['val'] += [val_loss/len(valloader)] # mean loss over all batches.
+    print(f"Val loss: {val_loss}")
+    scheduler.step()
+    print("LR:", optimizer.param_groups[0]["lr"])
 
     if np.mean(class_accs) > best_acc: # save the model if the current validation accuracy is better than the best seen so far.
         torch.save(net.state_dict(), 'steer_net.pth') # So at the end, steer_net.pth is the best-performing model during training (according to validation accuracy).
@@ -232,7 +336,8 @@ plt.show()
 #######################################################################################################################################
 ####     PERFORMANCE EVALUATION                                                                                                    ####
 #######################################################################################################################################
-net.load_state_dict(torch.load('steer_net.pth'))
+net.load_state_dict(torch.load('steer_net.pth', map_location = device))
+net.to(device)
 
 correct = 0
 total = 0
@@ -240,6 +345,8 @@ total = 0
 with torch.no_grad():
     for data in valloader:
         images, labels = data
+        images = images.to(device)
+        labels = labels.to(device)
         # calculate outputs by running images through the network
         outputs = net(images)
         
@@ -260,11 +367,13 @@ predicted = []
 with torch.no_grad():
     for data in valloader:
         images, labels = data
+        images = images.to(device)
+        labels = labels.to(device)
         outputs = net(images)
         _, predictions = torch.max(outputs, 1)
 
-        actual += labels.tolist()
-        predicted += predictions.tolist()
+        actual += labels.detach().cpu().tolist()
+        predicted += predictions.detach().cpu().tolist()
 
         # collect the correct predictions for each class
         for label, prediction in zip(labels, predictions):
