@@ -240,6 +240,32 @@ try:
         angle = float(np.clip(angle, -0.5, 0.5))
 
         # ====================================================================
+        # CONFIDENCE-BASED SPEED ADJUSTMENT
+        # ====================================================================
+        # Get the model's confidence (max probability).
+        # High confidence (close to 1.0) = model is sure -> drive faster
+        # Low confidence (close to 0.2 for 5 classes) = uncertain -> slow down
+        confidence = float(probs.max().item())
+        
+        # Define confidence thresholds and speed scaling
+        CONFIDENCE_HIGH = 0.7    # Above this: full speed
+        CONFIDENCE_LOW = 0.35    # Below this: minimum speed
+        SPEED_MIN_FACTOR = 0.4   # Minimum speed as fraction of base (40%)
+        
+        # Linear interpolation between min and full speed based on confidence
+        if confidence >= CONFIDENCE_HIGH:
+            speed_factor = 1.0
+        elif confidence <= CONFIDENCE_LOW:
+            speed_factor = SPEED_MIN_FACTOR
+        else:
+            # Linear scale between CONFIDENCE_LOW and CONFIDENCE_HIGH
+            speed_factor = SPEED_MIN_FACTOR + (1.0 - SPEED_MIN_FACTOR) * \
+                           (confidence - CONFIDENCE_LOW) / (CONFIDENCE_HIGH - CONFIDENCE_LOW)
+        
+        # Optional: print confidence for debugging (comment out in competition)
+        print(f"Conf: {confidence:.2f} -> Speed: {speed_factor:.2f}")
+
+        # ====================================================================
         # STOP SIGN DETECTION
         # ====================================================================
         # Crop image to ROI to focus on track and ignore periphery (shoes, walls, etc.)
@@ -342,10 +368,15 @@ try:
                 stop_sign_handled = False
         
         # ====================================================================
-        # MOTOR CONTROL
+        # MOTOR CONTROL (with confidence-based speed adjustment)
         # ====================================================================
-        Kd = 25  # Base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 25  # How fast to turn when given an angle
+        Kd_base = 25  # Base wheel speeds at full confidence
+        Ka_base = 25  # Turn rate at full confidence
+        
+        # Apply speed factor based on model confidence
+        Kd = Kd_base * speed_factor
+        Ka = Ka_base * speed_factor  # Also reduce turn rate when uncertain
+        
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
             
