@@ -247,8 +247,8 @@ try:
         # ====================================================================
         # MOTOR CONTROL
         # ====================================================================
-        Kd = 20  # Base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 20  # How fast to turn when given an angle
+        Kd = 25  # Base wheel speeds, increase to go faster, decrease to go slower
+        Ka = 25  # How fast to turn when given an angle
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
             
