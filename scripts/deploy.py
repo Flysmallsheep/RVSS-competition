@@ -35,52 +35,36 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+# Class labels (must match steerDS.py)
+CLASS_LABELS = ["sharp_left", "left", "straight", "right", "sharp_right"]
+
 bot = PiBot(ip=args.ip)
 
 # stop the robot 
 bot.setVelocity(0, 0)
 
 #INITIALISE NETWORK HERE
-# class Net(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         # Mirror the training architecture exactly so weights load correctly.
-#         self.conv1 = nn.Conv2d(3, 6, 5)
-#         self.conv2 = nn.Conv2d(6, 16, 5)
-#         self.pool = nn.MaxPool2d(2, 2)
-#         self.fc1 = nn.Linear(1344, 256)
-#         self.fc2 = nn.Linear(256, 5)
-#         self.relu = nn.ReLU()
-#         self.dropout = nn.Dropout(0.5)
-
-#     def forward(self, x):
-#         x = self.pool(self.relu(self.conv1(x)))
-#         x = self.pool(self.relu(self.conv2(x)))
-#         x = torch.flatten(x, 1)
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.dropout(x)
-#         x = self.fc2(x)
-#         return x
-
 class Net(nn.Module):
-    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+    def __init__(self):
         super().__init__()
-        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        self.model = mobilenet_v3_small(weights=weights)
-
-        in_features = self.model.classifier[-1].in_features
-        self.model.classifier[-1] = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(in_features, num_classes),
-        )
-
-        if freeze_backbone:
-            for p in self.model.features.parameters():
-                p.requires_grad = False
+        # Mirror the training architecture exactly so weights load correctly.
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(1344, 256)
+        self.fc2 = nn.Linear(256, 5)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        return self.model(x)
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+
 
 # Select CPU/GPU for inference. GPU is optional but faster if available.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -103,28 +87,15 @@ net.eval()
 # because training data came from cv2.imread (also BGR), so this stays consistent.
 transform = transforms.Compose([
     transforms.ToTensor(),               
-    transforms.Resize((40, 60)),         # Must match training input size
+    transforms.Resize((40, 60)),        
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
 # ============================================================================
 # STOP SIGN DETECTOR SETUP
 # ============================================================================
-# Initialize the stop sign detector with tunable parameters.
-# min_area: Minimum red blob area (pixels) to trigger a stop.
-#   - Smaller = detect from farther away (may cause early stops)
-#   - Larger = must be very close (may miss the sign)
-#   - Default 500 is a starting point; tune based on your camera and lighting.
-#
-# You can tune thresholds by running:
-#   python scripts/stop_sign_detector.py --image <image_path> --tune
 stop_detector = StopSignDetector(
     min_area=200,  # Tune this based on testing
-    # HSV thresholds for red (defaults usually work, but tune if needed):
-    # lower_red1=(0, 100, 100),
-    # upper_red1=(10, 255, 255),
-    # lower_red2=(160, 100, 100),
-    # upper_red2=(180, 255, 255),
 )
 
 # Stop sign handling state
@@ -161,6 +132,8 @@ print("GO!")
 
 try:
     angle = 0
+    frame_count = 0
+    debug_frames_saved = 0
     while True:
         # get an image from the the robot
         im = bot.getImage()
