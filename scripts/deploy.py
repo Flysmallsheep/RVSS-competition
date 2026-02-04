@@ -44,26 +44,45 @@ bot = PiBot(ip=args.ip)
 bot.setVelocity(0, 0)
 
 #INITIALISE NETWORK HERE
+# class Net(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         # Mirror the training architecture exactly so weights load correctly.
+#         self.conv1 = nn.Conv2d(3, 6, 5)
+#         self.conv2 = nn.Conv2d(6, 16, 5)
+#         self.pool = nn.MaxPool2d(2, 2)
+#         self.fc1 = nn.Linear(1344, 256)
+#         self.fc2 = nn.Linear(256, 5)
+#         self.relu = nn.ReLU()
+
+#     def forward(self, x):
+#         x = self.pool(self.relu(self.conv1(x)))
+#         x = self.pool(self.relu(self.conv2(x)))
+#         x = torch.flatten(x, 1)
+#         x = self.fc1(x)
+#         x = self.relu(x)
+#         x = self.fc2(x)
+#         return x
+
+
 class Net(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
         super().__init__()
-        # Mirror the training architecture exactly so weights load correctly.
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(1344, 256)
-        self.fc2 = nn.Linear(256, 5)
-        self.relu = nn.ReLU()
+        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        self.model = mobilenet_v3_small(weights=weights)
+
+        in_features = self.model.classifier[-1].in_features
+        self.model.classifier[-1] = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(in_features, num_classes),
+        )
+
+        if freeze_backbone:
+            for p in self.model.features.parameters():
+                p.requires_grad = False
 
     def forward(self, x):
-        x = self.pool(self.relu(self.conv1(x)))
-        x = self.pool(self.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
-
+        return self.model(x)
 
 
 # Select CPU/GPU for inference. GPU is optional but faster if available.
