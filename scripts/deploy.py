@@ -12,6 +12,7 @@ import argparse
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from torchvision.models import mobilenet_v3_small
 script_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.abspath(os.path.join(script_path, "../PenguinPi-robot/software/python/client/")))
 from pibot_client import PiBot
@@ -44,6 +45,9 @@ bot = PiBot(ip=args.ip)
 bot.setVelocity(0, 0)
 
 #INITIALISE NETWORK HERE
+###########################################################
+##########  Original CNN Model                   ##########
+###########################################################
 # class Net(nn.Module):
 #     def __init__(self):
 #         super().__init__()
@@ -64,7 +68,9 @@ bot.setVelocity(0, 0)
 #         x = self.fc2(x)
 #         return x
 
-
+###########################################################
+##########  MobileNet V3 Small Model             ##########
+###########################################################
 class Net(nn.Module):
     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
         super().__init__()
@@ -91,7 +97,7 @@ net = Net().to(device)
 
 #LOAD NETWORK WEIGHTS HERE
 # Use the same weights produced by scripts/train_net.py (default: steer_net.pth).
-model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net.pth"))
+model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net_mobile_net.pth"))
 if not os.path.exists(model_path):
     raise FileNotFoundError(
         f"Model file not found at {model_path}. "
@@ -266,8 +272,8 @@ try:
         # ====================================================================
         # MOTOR CONTROL
         # ====================================================================
-        Kd = 20  # Base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 20  # How fast to turn when given an angle
+        Kd = 25  # Base wheel speeds, increase to go faster, decrease to go slower
+        Ka = 25  # How fast to turn when given an angle
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
             
