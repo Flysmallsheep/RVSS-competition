@@ -143,6 +143,7 @@ print("Class names:", val_ds.class_labels)
 ####     INITIALISE OUR NETWORK                                                                                                    ####
 #######################################################################################################################################
 
+# Original cnn
 # class Net(nn.Module):
 #     def __init__(self):
 #         super().__init__()
