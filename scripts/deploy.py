@@ -34,6 +34,36 @@ parser.add_argument(
     default=None,
     help='Directory for debug images (default: deploy_debug/ in project root)',
 )
+# ROI (Region of Interest) for stop sign detection - crop to ignore periphery
+parser.add_argument(
+    '--roi_top',
+    type=int,
+    default=120,
+    help='Pixels to crop from top for stop sign ROI (default: 100, removes ceiling)',
+)
+parser.add_argument(
+    '--roi_bottom',
+    type=int,
+    default=None,
+    help='Bottom row for stop sign ROI (default: None = full height)',
+)
+parser.add_argument(
+    '--roi_left',
+    type=int,
+    default=0,
+    help='Pixels to crop from left for stop sign ROI (default: 0 = no left crop)',
+)
+parser.add_argument(
+    '--roi_right',
+    type=int,
+    default=None,
+    help='Right column for stop sign ROI (default: None = full width)',
+)
+parser.add_argument(
+    '--no_roi',
+    action='store_true',
+    help='Disable ROI cropping for stop sign detection (use full image)',
+)
 args = parser.parse_args()
 
 # Class labels (must match steerDS.py)
@@ -48,47 +78,47 @@ bot.setVelocity(0, 0)
 ###########################################################
 ##########  Original CNN Model                   ##########
 ###########################################################
-# class Net(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         # Mirror the training architecture exactly so weights load correctly.
-#         self.conv1 = nn.Conv2d(3, 6, 5)
-#         self.conv2 = nn.Conv2d(6, 16, 5)
-#         self.pool = nn.MaxPool2d(2, 2)
-#         self.fc1 = nn.Linear(1344, 256)
-#         self.fc2 = nn.Linear(256, 5)
-#         self.relu = nn.ReLU()
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Mirror the training architecture exactly so weights load correctly.
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(1344, 256)
+        self.fc2 = nn.Linear(256, 5)
+        self.relu = nn.ReLU()
 
-#     def forward(self, x):
-#         x = self.pool(self.relu(self.conv1(x)))
-#         x = self.pool(self.relu(self.conv2(x)))
-#         x = torch.flatten(x, 1)
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.fc2(x)
-#         return x
+    def forward(self, x):
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
 
 ###########################################################
 ##########  MobileNet V3 Small Model             ##########
 ###########################################################
-class Net(nn.Module):
-    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
-        super().__init__()
-        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        self.model = mobilenet_v3_small(weights=weights)
+# class Net(nn.Module):
+#     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+#         super().__init__()
+#         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+#         self.model = mobilenet_v3_small(weights=weights)
 
-        in_features = self.model.classifier[-1].in_features
-        self.model.classifier[-1] = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(in_features, num_classes),
-        )
+#         in_features = self.model.classifier[-1].in_features
+#         self.model.classifier[-1] = nn.Sequential(
+#             nn.Dropout(dropout),
+#             nn.Linear(in_features, num_classes),
+#         )
 
-        if freeze_backbone:
-            for p in self.model.features.parameters():
-                p.requires_grad = False
+#         if freeze_backbone:
+#             for p in self.model.features.parameters():
+#                 p.requires_grad = False
 
-    def forward(self, x):
-        return self.model(x)
+#     def forward(self, x):
+#         return self.model(x)
 
 
 # Select CPU/GPU for inference. GPU is optional but faster if available.
@@ -97,7 +127,7 @@ net = Net().to(device)
 
 #LOAD NETWORK WEIGHTS HERE
 # Use the same weights produced by scripts/train_net.py (default: steer_net.pth).
-model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net_mobile_net.pth"))
+model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net_trained_on_best_data_50_epochs.pth"))
 if not os.path.exists(model_path):
     raise FileNotFoundError(
         f"Model file not found at {model_path}. "
@@ -123,10 +153,28 @@ stop_detector = StopSignDetector(
     min_area=200,  # Tune this based on testing
 )
 
+# Region of Interest (ROI) for stop sign detection.
+# Crops the image to focus only on the track area, ignoring periphery
+# (shoes, walls, ceiling, etc.). Format: (top, bottom, left, right) in pixels.
+# Set to None to use full image. Adjust based on your camera placement.
+# Typical robot camera is 240 (H) x 320 (W).
+# Use --roi_top, --roi_bottom, --roi_left, --roi_right to tune, or --no_roi to disable.
+if args.no_roi:
+    STOP_SIGN_ROI = None
+    print("[stop_sign] ROI disabled (--no_roi), using full image")
+else:
+    STOP_SIGN_ROI = {
+        'top': args.roi_top,       # Crop from top (removes ceiling)
+        'bottom': args.roi_bottom, # Crop from bottom (None = keep to end)
+        'left': args.roi_left,     # Crop from left (removes side objects)
+        'right': args.roi_right,   # Crop to right edge
+    }
+    print(f"[stop_sign] ROI: top={args.roi_top}, bottom={args.roi_bottom}, left={args.roi_left}, right={args.roi_right}")
+
 # Stop sign handling state
 stop_sign_handled = False  # True if we've already stopped for the current sign
-STOP_DURATION = 2.0        # How long to stop (seconds)
-RESUME_COOLDOWN = 3.0      # Cooldown after stopping before detecting again
+STOP_DURATION = 1.0        # How long to stop (seconds)
+RESUME_COOLDOWN = 2.0      # Cooldown after stopping before detecting again
 last_stop_time = 0         # Timestamp of last stop (for cooldown)
 
 ########################################
@@ -194,20 +242,34 @@ try:
         # ====================================================================
         # STOP SIGN DETECTION
         # ====================================================================
-        # Check for stop signs using the full image (not cropped).
-        # The stop sign could be anywhere in the frame, not just the bottom.
+        # Crop image to ROI to focus on track and ignore periphery (shoes, walls, etc.)
         
         current_time = time.time()
         
         ##################################################
-        # Use the full image for stop sign detection
+        # Apply ROI crop for stop sign detection
         ##################################################
+        if STOP_SIGN_ROI is not None:
+            h, w = im.shape[:2]
+            top = STOP_SIGN_ROI.get('top', 0) or 0
+            bottom = STOP_SIGN_ROI.get('bottom') or h
+            left = STOP_SIGN_ROI.get('left', 0) or 0
+            right = STOP_SIGN_ROI.get('right') or w
+            # Clamp to valid range
+            top = max(0, min(top, h))
+            bottom = max(top, min(bottom, h))
+            left = max(0, min(left, w))
+            right = max(left, min(right, w))
+            im_for_stop = im[top:bottom, left:right, :]
+        else:
+            im_for_stop = im  # Use full image
+        
         if debug_stop_enabled:
-            stop_details = stop_detector.detect_with_details(im)
+            stop_details = stop_detector.detect_with_details(im_for_stop)
             stop_detected = stop_details['detected']
             stop_area = stop_details['largest_area']
         else:
-            stop_detected, stop_area = stop_detector.detect(im)
+            stop_detected, stop_area = stop_detector.detect(im_for_stop)
             stop_details = None
         
         # During inference: log red blob area periodically for tuning min_area
@@ -232,21 +294,31 @@ try:
                 if debug_stop_enabled and stop_details is not None:
                     debug_stop_frame_count += 1
                     prefix = os.path.join(debug_stop_dir, f"stop_{debug_stop_frame_count:04d}")
-                    cv2.imwrite(f"{prefix}_frame.jpg", im)
+                    # Save full frame for reference
+                    cv2.imwrite(f"{prefix}_frame_full.jpg", im)
+                    # Save the ROI-cropped frame (what the detector actually sees)
+                    cv2.imwrite(f"{prefix}_frame_roi.jpg", im_for_stop)
                     if stop_details.get('mask') is not None:
                         cv2.imwrite(f"{prefix}_mask.jpg", stop_details['mask'])
-                    vis = im.copy()
+                    # Draw overlay on the ROI image
+                    vis = im_for_stop.copy()
                     if stop_details.get('bounding_box'):
                         x, y, w, h = stop_details['bounding_box']
                         cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 0), 2)
                     if stop_details.get('centroid'):
                         cv2.circle(vis, stop_details['centroid'], 5, (0, 0, 255), -1)
+                    roi_str = f"ROI: top={STOP_SIGN_ROI['top']}, left={STOP_SIGN_ROI['left']}" if STOP_SIGN_ROI else "ROI: None"
                     cv2.putText(
                         vis, f"area={stop_area} min_area={stop_detector.min_area}",
-                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
+                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
+                    )
+                    cv2.putText(
+                        vis, roi_str,
+                        (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1
                     )
                     cv2.imwrite(f"{prefix}_overlay.jpg", vis)
-                    print(f"[debug_stop] Saved {prefix}_frame.jpg, _mask.jpg, _overlay.jpg")
+                    print(f"[debug_stop] Saved {prefix}_frame_full.jpg, _frame_roi.jpg, _mask.jpg, _overlay.jpg")
+                    print(f"  ROI: {STOP_SIGN_ROI}")
                     print(f"  largest_area={stop_area}, min_area={stop_detector.min_area}, centroid={stop_details.get('centroid')}, bbox={stop_details.get('bounding_box')}, all_areas={stop_details.get('all_areas', [])}")
                 
                 # STOP THE ROBOT COMPLETELY
@@ -272,8 +344,8 @@ try:
         # ====================================================================
         # MOTOR CONTROL
         # ====================================================================
-        Kd = 25  # Base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 25  # How fast to turn when given an angle
+        Kd = 20  # Base wheel speeds, increase to go faster, decrease to go slower
+        Ka = 20  # How fast to turn when given an angle
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
             
