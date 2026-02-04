@@ -143,7 +143,10 @@ print("Class names:", val_ds.class_labels)
 ####     INITIALISE OUR NETWORK                                                                                                    ####
 #######################################################################################################################################
 
-# Original cnn
+###########################################################
+##########  Original CNN Model                   ##########
+###########################################################
+
 # class Net(nn.Module):
 #     def __init__(self):
 #         super().__init__()
@@ -171,57 +174,27 @@ print("Class names:", val_ds.class_labels)
        
 #         return x
 
+###########################################################
+##########  MobileNet V3 Small Model             ##########
+###########################################################
+class Net(nn.Module):
+    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+        super().__init__()
+        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        self.model = mobilenet_v3_small(weights=weights)
 
-# class Net(nn.Module):
-#     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
-#         super().__init__()
-#         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-#         self.model = mobilenet_v3_small(weights=weights)
+        in_features = self.model.classifier[-1].in_features
+        self.model.classifier[-1] = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(in_features, num_classes),
+        )
 
-#         in_features = self.model.classifier[-1].in_features
-#         self.model.classifier[-1] = nn.Sequential(
-#             nn.Dropout(dropout),
-#             nn.Linear(in_features, num_classes),
-#         )
+        if freeze_backbone:
+            for p in self.model.features.parameters():
+                p.requires_grad = False
 
-#         if freeze_backbone:
-#             for p in self.model.features.parameters():
-#                 p.requires_grad = False
-
-#     def forward(self, x):
-#         return self.model(x)
-    
-# class Net(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.conv1 = nn.Conv2d(3, 6, 5)
-#         self.conv2 = nn.Conv2d(6, 16, 5)
-#         self.conv3 = nn.Conv2d(16, 16, 1)
-
-#         self.pool = nn.MaxPool2d(2, 2)
-
-#         self.fc1 = nn.Linear(1344, 256)
-#         self.fc2 = nn.Linear(256, 5)
-
-#         self.relu = nn.ReLU()
-
-
-#     def forward(self, x):
-#         #extract features with convolutional layers
-#         x = self.pool(self.relu(self.conv1(x)))
-#         x = self.pool(self.relu(self.conv2(x)))
-#         x = self.relu(self.conv3(x))
-#         x = torch.flatten(x, 1) # flatten all dimensions except batch
-        
-#         #linear layer for classification
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.fc2(x)
-       
-#         return x
-
-
-    
+    def forward(self, x):
+        return self.model(x)
 
 net = Net().to(device)
 
