@@ -102,8 +102,8 @@ try:
             continue
 
         angle = np.clip(angle, -0.5, 0.5)
-        Kd = 15  # Base wheel speeds
-        Ka = 15  # Turn speed
+        Kd = 25  # Base wheel speeds
+        Ka = 25  # Turn speed
         left  = int(Kd + Ka*angle)
         right = int(Kd - Ka*angle)
 
