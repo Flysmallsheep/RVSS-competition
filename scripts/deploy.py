@@ -143,10 +143,10 @@ net.eval()
 # because training data came from cv2.imread (also BGR), so this stays consistent.
 transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Resize((40, 60)),
-                                transforms.ColorJitter(
-                                    saturation=0.3,  # +/- 30% saturation
-                                    hue=0.05         # +/- 0.05 hue (range is [-0.5, 0.5])
-                                ),
+                                # transforms.ColorJitter(
+                                #     saturation=0.3,  # +/- 30% saturation
+                                #     hue=0.05         # +/- 0.05 hue (range is [-0.5, 0.5])
+                                # ),
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                 ])
 
