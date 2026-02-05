@@ -78,47 +78,47 @@ bot.setVelocity(0, 0)
 ###########################################################
 ##########  Original CNN Model                   ##########
 ###########################################################
-class Net(nn.Module):
-    def __init__(self):
-        super().__init__()
-        # Mirror the training architecture exactly so weights load correctly.
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(1344, 256)
-        self.fc2 = nn.Linear(256, 5)
-        self.relu = nn.ReLU()
+# class Net(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         # Mirror the training architecture exactly so weights load correctly.
+#         self.conv1 = nn.Conv2d(3, 6, 5)
+#         self.conv2 = nn.Conv2d(6, 16, 5)
+#         self.pool = nn.MaxPool2d(2, 2)
+#         self.fc1 = nn.Linear(1344, 256)
+#         self.fc2 = nn.Linear(256, 5)
+#         self.relu = nn.ReLU()
 
-    def forward(self, x):
-        x = self.pool(self.relu(self.conv1(x)))
-        x = self.pool(self.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+#     def forward(self, x):
+#         x = self.pool(self.relu(self.conv1(x)))
+#         x = self.pool(self.relu(self.conv2(x)))
+#         x = torch.flatten(x, 1)
+#         x = self.fc1(x)
+#         x = self.relu(x)
+#         x = self.fc2(x)
+#         return x
 
 ###########################################################
 ##########  MobileNet V3 Small Model             ##########
 ###########################################################
-# class Net(nn.Module):
-#     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
-#         super().__init__()
-#         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-#         self.model = mobilenet_v3_small(weights=weights)
+class Net(nn.Module):
+    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+        super().__init__()
+        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+        self.model = mobilenet_v3_small(weights=weights)
 
-#         in_features = self.model.classifier[-1].in_features
-#         self.model.classifier[-1] = nn.Sequential(
-#             nn.Dropout(dropout),
-#             nn.Linear(in_features, num_classes),
-#         )
+        in_features = self.model.classifier[-1].in_features
+        self.model.classifier[-1] = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(in_features, num_classes),
+        )
 
-#         if freeze_backbone:
-#             for p in self.model.features.parameters():
-#                 p.requires_grad = False
+        if freeze_backbone:
+            for p in self.model.features.parameters():
+                p.requires_grad = False
 
-#     def forward(self, x):
-#         return self.model(x)
+    def forward(self, x):
+        return self.model(x)
 
 
 # Select CPU/GPU for inference. GPU is optional but faster if available.
@@ -140,11 +140,14 @@ net.eval()
 
 # Image preprocessing must match training (resize + normalize). We keep BGR order
 # because training data came from cv2.imread (also BGR), so this stays consistent.
-transform = transforms.Compose([
-    transforms.ToTensor(),               
-    transforms.Resize((40, 60)),        
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-])
+transform = transforms.Compose([transforms.ToTensor(),
+                                transforms.Resize((40, 60)),
+                                transforms.ColorJitter(
+                                    saturation=0.3,  # +/- 30% saturation
+                                    hue=0.05         # +/- 0.05 hue (range is [-0.5, 0.5])
+                                ),
+                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                ])
 
 # ============================================================================
 # STOP SIGN DETECTOR SETUP
