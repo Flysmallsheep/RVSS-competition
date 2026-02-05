@@ -124,7 +124,7 @@ net = Net().to(device)
 
 #LOAD NETWORK WEIGHTS HERE
 # Use the same weights produced by scripts/train_net.py (default: steer_net.pth).
-model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net.pth"))
+model_path = os.path.abspath(os.path.join(script_path, "..", "mobile_net_hasin.pth"))
 if not os.path.exists(model_path):
     raise FileNotFoundError(
         f"Model file not found at {model_path}. "
