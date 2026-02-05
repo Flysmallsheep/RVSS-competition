@@ -23,6 +23,7 @@ from stop_sign_detector import StopSignDetector
 
 parser = argparse.ArgumentParser(description='PiBot client')
 parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
+parser.add_argument('--show', action='store_true', help='Show live camera feed during inference (for debugging)')
 parser.add_argument(
     '--debug_stop',
     action='store_true',
@@ -127,7 +128,7 @@ net = Net().to(device)
 
 #LOAD NETWORK WEIGHTS HERE
 # Use the same weights produced by scripts/train_net.py (default: steer_net.pth).
-model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net_trained_on_best_data_50_epochs.pth"))
+model_path = os.path.abspath(os.path.join(script_path, "..", "steer_net.pth"))
 if not os.path.exists(model_path):
     raise FileNotFoundError(
         f"Model file not found at {model_path}. "
@@ -150,7 +151,7 @@ transform = transforms.Compose([
 # STOP SIGN DETECTOR SETUP
 # ============================================================================
 stop_detector = StopSignDetector(
-    min_area=200,  # Tune this based on testing
+    min_area=100,  # Tune this based on testing
 )
 
 # Region of Interest (ROI) for stop sign detection.
@@ -264,6 +265,22 @@ try:
         
         # Optional: print confidence for debugging (comment out in competition)
         print(f"Conf: {confidence:.2f} -> Speed: {speed_factor:.2f}")
+
+        # Live camera feed for debugging (press 'q' to quit)
+        if args.show and im is not None:
+            vis = im.copy()
+            cv2.putText(
+                vis,
+                f"angle: {angle:.2f} conf: {confidence:.2f}",
+                (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
+            cv2.imshow("deploy live", vis)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
         # ====================================================================
         # STOP SIGN DETECTION
@@ -383,5 +400,9 @@ try:
         bot.setVelocity(left, right)
             
         
-except KeyboardInterrupt:    
+except KeyboardInterrupt:
+    pass
+finally:
     bot.setVelocity(0, 0)
+    if args.show:
+        cv2.destroyAllWindows()
