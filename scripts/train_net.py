@@ -21,7 +21,7 @@ from steerDS import SteerDataSet
 torch.manual_seed(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
-BATCH_SIZE = 2048
+BATCH_SIZE = 1024
 
 
 #Helper function for visualising images in our dataset
@@ -147,54 +147,56 @@ print("Class names:", val_ds.class_labels)
 ##########  Original CNN Model                   ##########
 ###########################################################
 
-# class Net(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         self.conv1 = nn.Conv2d(3, 6, 5)
-#         self.conv2 = nn.Conv2d(6, 16, 5)
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.conv2 = nn.Conv2d(6, 16, 5)
 
-#         self.pool = nn.MaxPool2d(2, 2)
+        self.pool = nn.MaxPool2d(2, 2)
 
-#         self.fc1 = nn.Linear(1344, 256)
-#         self.fc2 = nn.Linear(256, 5)
+        self.fc1 = nn.Linear(1344, 256)
+        self.fc2 = nn.Linear(256, 5)
 
-#         self.relu = nn.ReLU()
+        self.relu = nn.ReLU()
 
 
-#     def forward(self, x):
-#         #extract features with convolutional layers
-#         x = self.pool(self.relu(self.conv1(x)))
-#         x = self.pool(self.relu(self.conv2(x)))
-#         x = torch.flatten(x, 1) # flatten all dimensions except batch
+    def forward(self, x):
+        #extract features with convolutional layers
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
         
-#         #linear layer for classification
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.fc2(x)
+        #linear layer for classification
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
        
-#         return x
+        return x
 
 ###########################################################
 ##########  MobileNet V3 Small Model             ##########
 ###########################################################
-class Net(nn.Module):
-    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
-        super().__init__()
-        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        self.model = mobilenet_v3_small(weights=weights)
+# class Net(nn.Module):
+#     def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+#         super().__init__()
+#         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+#         self.model = mobilenet_v3_small(weights=weights)
 
-        in_features = self.model.classifier[-1].in_features
-        self.model.classifier[-1] = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(in_features, num_classes),
-        )
+#         in_features = self.model.classifier[-1].in_features
+#         self.model.classifier[-1] = nn.Sequential(
+#             nn.Dropout(dropout),
+#             nn.Linear(in_features, num_classes),
+#         )
 
-        if freeze_backbone:
-            for p in self.model.features.parameters():
-                p.requires_grad = False
+#         if freeze_backbone:
+#             for p in self.model.features.parameters():
+#                 p.requires_grad = False
 
-    def forward(self, x):
-        return self.model(x)
+#     def forward(self, x):
+#         return self.model(x)
+
+
 
 net = Net().to(device)
 
@@ -218,7 +220,7 @@ scheduler = optim.lr_scheduler.StepLR(
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
-num_epochs = 15
+num_epochs = 50
 losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
 accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
 best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
@@ -289,7 +291,7 @@ for epoch in range(num_epochs):  # loop over the dataset multiple times
     print("LR:", optimizer.param_groups[0]["lr"])
 
     if np.mean(class_accs) > best_acc: # save the model if the current validation accuracy is better than the best seen so far.
-        torch.save(net.state_dict(), 'steer_net.pth') # So at the end, steer_net.pth is the best-performing model during training (according to validation accuracy).
+        torch.save(net.state_dict(), 'steer_net.pth')
         best_acc = np.mean(class_accs)
 
 print('Finished Training')
