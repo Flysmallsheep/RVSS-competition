@@ -220,7 +220,7 @@ scheduler = optim.lr_scheduler.StepLR(
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
-num_epochs = 50
+num_epochs = 30
 losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
 accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
 best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
