@@ -13,6 +13,7 @@ import sklearn.metrics as metrics
 import matplotlib.pyplot as plt
 
 from steerDS import SteerDataSet
+from compound_sampler import create_compound_sampler  # Compound weighting: class balance + critical emphasis
 
 #######################################################################################################################################
 ####     This tutorial is adapted from the PyTorch "Train a Classifier" tutorial                                                   ####
@@ -47,34 +48,11 @@ transform = transforms.Compose([transforms.ToTensor(),
 
 from pathlib import Path
 
-from torch.utils.data import WeightedRandomSampler
-import numpy as np
-
-def make_weighted_sampler(dataset, num_classes=5):
-    # Get label for every sample in the dataset
-    labels = []
-    for i in range(len(dataset)):
-        _, y = dataset[i]
-        labels.append(int(y))
-    labels = np.array(labels)
-
-    # Count class frequency
-    class_counts = np.bincount(labels, minlength=num_classes)
-    print("Train class counts:", class_counts.tolist())
-
-    # Inverse frequency weights (avoid div-by-zero)
-    class_weights = 1.0 / np.maximum(class_counts, 1)
-    sample_weights = class_weights[labels]
-
-    # Sample class 'straight' (class 2) 1.1x more than the others
-    sample_weights[labels == 2] *= 1.1
-
-    sampler = WeightedRandomSampler(
-        weights=torch.as_tensor(sample_weights, dtype=torch.double),
-        num_samples=len(sample_weights),   # samples per epoch
-        replacement=True                  # oversampling works via replacement
-    )
-    return sampler
+# OLD: make_weighted_sampler (class-only weighting) - REMOVED
+# NEW: Using compound_sampler which handles BOTH:
+#   1. Class imbalance (inverse frequency weighting)
+#   2. Scenario imbalance (critical tiles get higher weight)
+# See compound_sampler.py for implementation details.
 
 
 def gather_all_images(root_dir: str, img_ext: str = ".jpg"):
@@ -102,10 +80,15 @@ def split_train_val_by_folder(files, train_ratio=0.9, seed=0):
 #######################################################################################################################################
 ####     HYPERPARAMETERS - Tune these for your dataset (~14k images)                                                               ####
 #######################################################################################################################################
-BATCH_SIZE = 256      # Good balance: ~55 batches/epoch for 14k images
-num_epochs = 50           # Enough iterations to converge
-LEARNING_RATE = 0.001 # Adam default, works well
-WEIGHT_DECAY = 0   # L2 regularization to prevent overfitting For example, 1e-4
+BATCH_SIZE = 256          # Good balance: ~55 batches/epoch for 14k images
+NUM_EPOCHS = 40           # Enough iterations to converge
+LEARNING_RATE = 0.001     # Adam default, works well
+WEIGHT_DECAY = 0          # L2 regularization to prevent overfitting (e.g., 1e-4)
+CRITICAL_MULTIPLIER = 3.0 # How much more to weight critical tiles (turns/S-shapes)
+
+# Early stopping parameters
+EARLY_STOP_PATIENCE = 8   # Stop if val loss doesn't improve for this many epochs
+EARLY_STOP_MIN_DELTA = 0.001  # Minimum improvement to count as "better"
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -122,7 +105,8 @@ print("Val images:", len(val_files))
 train_ds = SteerDataSet(filenames=train_files, img_ext=".jpg", transform=transform)
 val_ds   = SteerDataSet(filenames=val_files,   img_ext=".jpg", transform=transform)
 
-train_sampler = make_weighted_sampler(train_ds, num_classes=5)
+# Create compound sampler: addresses BOTH class imbalance AND critical tile emphasis
+train_sampler = create_compound_sampler(train_ds, critical_multiplier=CRITICAL_MULTIPLIER)
 
 trainloader = DataLoader(
     train_ds,
@@ -216,101 +200,180 @@ criterion = nn.CrossEntropyLoss()
 # optimizer = optim.SGD(net.parameters(), lr=LEARNING_RATE, momentum=0.9)
 optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-scheduler = optim.lr_scheduler.StepLR(
+# ReduceLROnPlateau: reduces LR when validation loss stops improving
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
-    step_size=5,  # every 5 epochs
-    gamma=0.5     # halve the LR
+    mode='min',       # minimize validation loss
+    factor=0.5,       # halve the LR when triggered
+    patience=3,       # wait 3 epochs before reducing
+    min_lr=1e-6       # don't go below this LR
 )
 
 
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
-losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
-accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
-best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
-for epoch in range(num_epochs):  # loop over the dataset multiple times
 
+# Print training configuration summary
+print("\n" + "="*70)
+print("TRAINING CONFIGURATION")
+print("="*70)
+print(f"  Batch size:          {BATCH_SIZE}")
+print(f"  Epochs:              {NUM_EPOCHS}")
+print(f"  Learning rate:       {LEARNING_RATE}")
+print(f"  Weight decay:        {WEIGHT_DECAY}")
+print(f"  Critical multiplier: {CRITICAL_MULTIPLIER}")
+print(f"  Early stop patience: {EARLY_STOP_PATIENCE}")
+print(f"  Training samples:    {len(train_ds)}")
+print(f"  Validation samples:  {len(val_ds)}")
+print(f"  Batches per epoch:   {len(trainloader)}")
+print(f"  Device:              {device}")
+print("="*70 + "\n")
+
+losses = {'train': [], 'val': []}
+accs = {'train': [], 'val': []}
+best_acc = 0
+best_val_loss = float('inf')
+epochs_without_improvement = 0
+CLASS_LABELS = ["sharp_left", "left", "straight", "right", "sharp_right"]
+for epoch in range(NUM_EPOCHS):
+    # ================================================================
+    # TRAINING PHASE
+    # ================================================================
+    net.train()
     epoch_loss = 0.0
     correct = 0
     total = 0
-    for i, data in enumerate(trainloader, 0): # yields mini-batches
-        # get the inputs; data is a list of [inputs, labels]
+    num_batches = len(trainloader)
+    
+    for i, data in enumerate(trainloader):
         inputs, labels = data
         inputs = inputs.to(device)
         labels = labels.to(device)
 
-        # reset the parameter gradients
         optimizer.zero_grad()
-
-        # forward + backward + optimize
         outputs = net(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
 
-        # print statistics
-        epoch_loss += loss.item() # Adds the scalar loss for this batch to the epoch total.
+        epoch_loss += loss.item()
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        
+        # Progress indicator every 10 batches
+        if (i + 1) % 10 == 0 or (i + 1) == num_batches:
+            print(f"\r  Epoch {epoch+1}/{NUM_EPOCHS} | Batch {i+1}/{num_batches} | Loss: {loss.item():.4f}", end="")
+    
+    print()  # New line after progress
+    
+    train_loss = epoch_loss / len(trainloader)
+    train_acc = 100. * correct / total
+    losses['train'].append(train_loss)
+    accs['train'].append(train_acc)
 
-        _, predicted = torch.max(outputs, 1) # Finds the class with the highest logit for each sample in the batch.
-        total += labels.size(0) # Adds number of samples in this batch.
-        correct += (predicted == labels).sum().item() # Counts number of correct predictions in this batch.
-
-    print(f'Epoch {epoch + 1} loss: {epoch_loss / len(trainloader)}')
-    losses['train'] += [epoch_loss / len(trainloader)] # mean loss over all batchesper epoch.
-    accs['train'] += [100.*correct/total]  # accuracy per epoch.
- 
-    # Validation Setup:
-    correct_pred = {classname: 0 for classname in val_ds.class_labels} # e.g. correct_pred['left'] = how many of those were predicted correctly
-    total_pred = {classname: 0 for classname in val_ds.class_labels} # e.g. total_pred['left'] = how many “left” examples exist in validation
-
-    # Validation Loop:
-    # Question: how does validation data ensure random sampling of the dataset? where in the code is this ensured? Or the training data is located in a different order to the validation data?
+    # ================================================================
+    # VALIDATION PHASE
+    # ================================================================
+    net.eval()
+    correct_pred = {label: 0 for label in CLASS_LABELS}
+    total_pred = {label: 0 for label in CLASS_LABELS}
     val_loss = 0
-    with torch.no_grad(): # disable gradient computation to save memory and speed up inference.
+    
+    with torch.no_grad():
         for data in valloader:
             images, labels = data
             images = images.to(device)
             labels = labels.to(device)
             outputs = net(images)
-            _, predictions = torch.max(outputs, 1) # Finds the class with the highest logit for each sample in the batch, and returns the index of the class.
+            _, predictions = torch.max(outputs, 1)
             loss = criterion(outputs, labels)
 
             val_loss += loss.item()
-            # collect the correct predictions for each class
             for label, prediction in zip(labels, predictions):
+                label_name = CLASS_LABELS[label.item()]
+                total_pred[label_name] += 1
                 if label == prediction:
-                    correct_pred[val_ds.class_labels[label.item()]] += 1
-                total_pred[val_ds.class_labels[label.item()]] += 1
+                    correct_pred[label_name] += 1
 
-    # print accuracy for each class
+    # Calculate per-class accuracy
     class_accs = []
-    for classname, correct_count in correct_pred.items():
-        accuracy = 100 * float(correct_count) / total_pred[classname] # per-class accuracy.
-        class_accs += [accuracy]
+    for classname in CLASS_LABELS:
+        if total_pred[classname] > 0:
+            acc = 100 * correct_pred[classname] / total_pred[classname]
+            class_accs.append(acc)
+        else:
+            class_accs.append(0.0)
 
-    accs['val'] += [np.mean(class_accs)] # mean accuracy over all classes.
-    losses['val'] += [val_loss/len(valloader)] # mean loss over all batches.
-    print(f"Val loss: {val_loss}")
-    scheduler.step()
-    print("LR:", optimizer.param_groups[0]["lr"])
+    val_loss_avg = val_loss / len(valloader)
+    val_acc_avg = np.mean(class_accs)
+    losses['val'].append(val_loss_avg)
+    accs['val'].append(val_acc_avg)
 
-    if np.mean(class_accs) > best_acc: # save the model if the current validation accuracy is better than the best seen so far.
+    # ================================================================
+    # PRINT EPOCH SUMMARY WITH PER-CLASS ACCURACY
+    # ================================================================
+    print(f"\n  Epoch {epoch+1}/{NUM_EPOCHS} Summary:")
+    print(f"    Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.1f}%")
+    print(f"    Val Loss:   {val_loss_avg:.4f} | Val Acc:   {val_acc_avg:.1f}%")
+    print(f"    Per-class accuracy:")
+    for i, classname in enumerate(CLASS_LABELS):
+        status = "+" if class_accs[i] >= 90 else "~" if class_accs[i] >= 70 else "-"
+        print(f"      {classname:<12}: {class_accs[i]:5.1f}% [{status}]")
+    
+    # Step scheduler with validation loss
+    scheduler.step(val_loss_avg)
+    print(f"    Current LR: {optimizer.param_groups[0]['lr']:.6f}")
+
+    # ================================================================
+    # SAVE BEST MODEL
+    # ================================================================
+    if val_acc_avg > best_acc:
         torch.save(net.state_dict(), 'steer_net.pth')
-        best_acc = np.mean(class_accs)
+        best_acc = val_acc_avg
+        print(f"    >>> New best model saved! (Val Acc: {best_acc:.1f}%)")
 
-print('Finished Training')
+    # ================================================================
+    # EARLY STOPPING CHECK
+    # ================================================================
+    if val_loss_avg < best_val_loss - EARLY_STOP_MIN_DELTA:
+        best_val_loss = val_loss_avg
+        epochs_without_improvement = 0
+    else:
+        epochs_without_improvement += 1
+        print(f"    ! No improvement for {epochs_without_improvement}/{EARLY_STOP_PATIENCE} epochs")
+    
+    if epochs_without_improvement >= EARLY_STOP_PATIENCE:
+        print(f"\n  EARLY STOPPING triggered after {epoch+1} epochs!")
+        print(f"  Best validation loss: {best_val_loss:.4f}")
+        break
+    
+    print("-" * 60)
 
-plt.plot(losses['train'], label = 'Training')
-plt.plot(losses['val'], label = 'Validation')
+print('\n' + "="*70)
+print('TRAINING COMPLETE')
+print(f'Best validation accuracy: {best_acc:.1f}%')
+print("="*70)
+
+# Plot training curves
+plt.figure(figsize=(12, 4))
+plt.subplot(1, 2, 1)
+plt.plot(losses['train'], label='Training')
+plt.plot(losses['val'], label='Validation')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
-plt.show()
+plt.legend()
+plt.title('Loss Curves')
 
-plt.plot(accs['train'], label = 'Training')
-plt.plot(accs['val'], label = 'Validation')
+plt.subplot(1, 2, 2)
+plt.plot(accs['train'], label='Training')
+plt.plot(accs['val'], label='Validation')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
+plt.legend()
+plt.title('Accuracy Curves')
+plt.tight_layout()
 plt.show()
 
 

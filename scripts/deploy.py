@@ -79,43 +79,43 @@ bot.setVelocity(0, 0)
 ###########################################################
 ##########  Original CNN Model                   ##########
 ###########################################################
-# class Net(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#         # Mirror the training architecture exactly so weights load correctly.
-#         self.conv1 = nn.Conv2d(3, 6, 5)
-#         self.conv2 = nn.Conv2d(6, 16, 5)
-#         self.pool = nn.MaxPool2d(2, 2)
-#         self.fc1 = nn.Linear(1344, 256)
-#         self.fc2 = nn.Linear(256, 5)
-#         self.relu = nn.ReLU()
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Mirror the training architecture exactly so weights load correctly.
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(1344, 256)
+        self.fc2 = nn.Linear(256, 5)
+        self.relu = nn.ReLU()
 
-#     def forward(self, x):
-#         x = self.pool(self.relu(self.conv1(x)))
-#         x = self.pool(self.relu(self.conv2(x)))
-#         x = torch.flatten(x, 1)
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.fc2(x)
-#         return x
+    def forward(self, x):
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
 
 ###########################################################
 ##########  MobileNet V3 Small Model             ##########
-###########################################################
-class Net(nn.Module):
-    def __init__(self, num_classes=5):
-        super().__init__()
-        # Using pretrained weights helps the model recognize shapes (lines) faster
-        self.model = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+# ###########################################################
+# class Net(nn.Module):
+#     def __init__(self, num_classes=5):
+#         super().__init__()
+#         # Using pretrained weights helps the model recognize shapes (lines) faster
+#         self.model = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
         
-        # Re-map the classifier head to 5 classes
-        in_features = self.model.classifier[-1].in_features
-        self.model.classifier[-1] = nn.Sequential(
-            nn.Linear(in_features, num_classes)
-        )
+#         # Re-map the classifier head to 5 classes
+#         in_features = self.model.classifier[-1].in_features
+#         self.model.classifier[-1] = nn.Sequential(
+#             nn.Linear(in_features, num_classes)
+#         )
 
-    def forward(self, x):
-        return self.model(x)
+#     def forward(self, x):
+#         return self.model(x)
 
 
 # Select CPU/GPU for inference. GPU is optional but faster if available.
@@ -124,7 +124,7 @@ net = Net().to(device)
 
 #LOAD NETWORK WEIGHTS HERE
 # Use the same weights produced by scripts/train_net.py (default: steer_net.pth).
-model_path = os.path.abspath(os.path.join(script_path, "..", "mobile_net_hasin.pth"))
+model_path = os.path.abspath(os.path.join(script_path, "..", "baseline_compound_weight_sampler.pth"))
 if not os.path.exists(model_path):
     raise FileNotFoundError(
         f"Model file not found at {model_path}. "
