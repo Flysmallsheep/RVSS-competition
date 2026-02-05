@@ -36,6 +36,8 @@ CRITICAL_FOLDERS = [
     'green_clockwise', 
     'orange_anticlockwise',
     'orange_clockwise',
+    'failed_piles',
+    'final_data',
 ]
 
 
