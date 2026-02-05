@@ -81,7 +81,7 @@ def split_train_val_by_folder(files, train_ratio=0.9, seed=0):
 ####     HYPERPARAMETERS - Tune these for your dataset (~14k images)                                                               ####
 #######################################################################################################################################
 BATCH_SIZE = 256          # Good balance: ~55 batches/epoch for 14k images
-NUM_EPOCHS = 40           # Enough iterations to converge
+NUM_EPOCHS = 45           # Enough iterations to converge
 LEARNING_RATE = 0.001     # Adam default, works well
 WEIGHT_DECAY = 0          # L2 regularization to prevent overfitting (e.g., 1e-4)
 CRITICAL_MULTIPLIER = 3.0 # How much more to weight critical tiles (turns/S-shapes)
