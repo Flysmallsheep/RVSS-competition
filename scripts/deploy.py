@@ -103,20 +103,16 @@ bot.setVelocity(0, 0)
 ##########  MobileNet V3 Small Model             ##########
 ###########################################################
 class Net(nn.Module):
-    def __init__(self, num_classes=5, pretrained=False, dropout=0.2, freeze_backbone=False):
+    def __init__(self, num_classes=5):
         super().__init__()
-        weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        self.model = mobilenet_v3_small(weights=weights)
-
+        # Using pretrained weights helps the model recognize shapes (lines) faster
+        self.model = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
+        
+        # Re-map the classifier head to 5 classes
         in_features = self.model.classifier[-1].in_features
         self.model.classifier[-1] = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(in_features, num_classes),
+            nn.Linear(in_features, num_classes)
         )
-
-        if freeze_backbone:
-            for p in self.model.features.parameters():
-                p.requires_grad = False
 
     def forward(self, x):
         return self.model(x)
