@@ -21,8 +21,6 @@ from steerDS import SteerDataSet
 torch.manual_seed(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
-BATCH_SIZE = 1024
-
 
 #Helper function for visualising images in our dataset
 def imshow(img):
@@ -100,6 +98,14 @@ def split_train_val_by_folder(files, train_ratio=0.9, seed=0):
     train_files = [f for f in files if Path(f).parent in train_parents]
     val_files   = [f for f in files if Path(f).parent not in train_parents]
     return train_files, val_files
+
+#######################################################################################################################################
+####     HYPERPARAMETERS - Tune these for your dataset (~14k images)                                                               ####
+#######################################################################################################################################
+BATCH_SIZE = 256      # Good balance: ~55 batches/epoch for 14k images
+num_epochs = 50           # Enough iterations to converge
+LEARNING_RATE = 0.001 # Adam default, works well
+WEIGHT_DECAY = 0   # L2 regularization to prevent overfitting For example, 1e-4
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -207,8 +213,8 @@ net = Net().to(device)
 #for classification tasks
 criterion = nn.CrossEntropyLoss()
 #You could use also ADAM
-# optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-optimizer = optim.Adam(net.parameters(), lr=0.01)
+# optimizer = optim.SGD(net.parameters(), lr=LEARNING_RATE, momentum=0.9)
+optimizer = optim.Adam(net.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
 scheduler = optim.lr_scheduler.StepLR(
     optimizer,
@@ -220,7 +226,6 @@ scheduler = optim.lr_scheduler.StepLR(
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
 #######################################################################################################################################
-num_epochs = 30
 losses = {'train': [], 'val': []} # Stores average loss per epoch for training and validation
 accs = {'train': [], 'val': []}   # Stores average accuracy per epoch for training and validation
 best_acc = 0 # Keeps track of the best validation accuracy seen so far (used to decide when to save the model).
